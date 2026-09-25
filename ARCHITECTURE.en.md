@@ -465,9 +465,13 @@ correctable from definitive outcomes.
   delete, outbox concurrency, retry, abandoned-lock recovery and
   republication-with-stable-eventId, pending reference resolution and expiry,
   restart preservation, Fx composition start/stop, HTTP authentication
-  (missing, malformed and expired tokens)/provider isolation, and the mandatory
-  concurrency scenarios (50× same bet, two 80.00 bets over 100.00, distinct
-  wallets in parallel) using three independent instances (separate pools).
+  (missing, malformed, forged — `alg: none`, tampered payload, wrong signing
+  key, wrong issuer, wrong audience — and expired tokens), the authorization
+  matrix (provider isolation, internal-only wallet operations, public
+  health/metrics) and the absence of side effects from unauthorized attempts,
+  plus the mandatory concurrency scenarios (50× same bet, two 80.00 bets over
+  100.00, distinct wallets in parallel) using three independent instances
+  (separate pools).
 - **Unit** additionally covers idempotency conflict semantics with in-memory
   repository fakes (`internal/app/wager/service_test.go`).
 - `go test -race` is run for both unit and integration suites.

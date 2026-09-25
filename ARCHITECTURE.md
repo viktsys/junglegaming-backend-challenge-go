@@ -477,10 +477,14 @@ resultados corrigíveis de definitivos.
   commit e delete, concorrência de outbox, retry, recuperação de lock
   abandonado e republicação com eventId estável, resolução e expiração de
   referências pendentes, preservação após restart, start/stop da composição Fx,
-  autenticação HTTP (tokens ausentes, malformados e expirados)/isolamento entre
-  provedores, e os cenários obrigatórios de concorrência (50× a mesma aposta,
-  duas apostas de 80.00 sobre 100.00, carteiras distintas em paralelo) usando
-  três instâncias independentes (pools separados).
+  autenticação HTTP (tokens ausentes, malformados, forjados — `alg: none`,
+  payload adulterado, chave de assinatura errada, issuer errado, audience
+  errada — e expirados), a matriz de autorização (isolamento entre provedores,
+  operações de carteira restritas ao serviço interno, health/metrics públicos)
+  e a ausência de efeitos colaterais em tentativas não autorizadas, além dos
+  cenários obrigatórios de concorrência (50× a mesma aposta, duas apostas de
+  80.00 sobre 100.00, carteiras distintas em paralelo) usando três instâncias
+  independentes (pools separados).
 - Os **unitários** cobrem adicionalmente a semântica de conflito de
   idempotência com fakes de repositório em memória
   (`internal/app/wager/service_test.go`).

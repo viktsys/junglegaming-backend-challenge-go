@@ -146,15 +146,16 @@ func NewAuth(verifier *oidc.Verifier) *Auth {
 	return &Auth{verifier: verifier}
 }
 
-// Authenticate rejects requests without a valid bearer token.
+// Authenticate rejects requests without a valid bearer token. The auth scheme
+// is compared case-insensitively as required by RFC 7235.
 func (a *Auth) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
+		scheme, credentials, found := strings.Cut(r.Header.Get("Authorization"), " ")
+		if !found || !strings.EqualFold(scheme, "Bearer") {
 			writeError(w, apperr.New(apperr.KindUnauthorized, "MISSING_TOKEN", "Authorization bearer token is required"))
 			return
 		}
-		rawToken := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+		rawToken := strings.TrimSpace(credentials)
 		if rawToken == "" {
 			writeError(w, apperr.New(apperr.KindUnauthorized, "MISSING_TOKEN", "Authorization bearer token is required"))
 			return

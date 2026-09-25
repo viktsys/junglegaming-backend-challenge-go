@@ -142,9 +142,10 @@ func TestHTTPAuthenticationAndProviderIsolation(t *testing.T) {
 	assertLedgerCount(t, inst, mustParseUUID(t, wallet.ID), 2)
 }
 
-// TestExpiredTokenIsRejected lowers the provider-b token lifespan through the
-// Keycloak admin API, obtains a token, waits for it to expire and verifies the
-// API rejects it.
+// TestExpiredTokenIsRejected creates a dedicated Keycloak client whose tokens
+// expire after one second, obtains a token, waits for it to expire and
+// verifies the API rejects it. A dedicated client keeps the test isolated from
+// the shared provider identities.
 func TestExpiredTokenIsRejected(t *testing.T) {
 	resetDatabase(t)
 	inst := newInstance(t)
@@ -172,21 +173,53 @@ func TestExpiredTokenIsRejected(t *testing.T) {
 
 	host := strings.TrimSuffix(issuer, "/realms/wager")
 	adminToken := fetchPasswordToken(t, host, "admin", "admin")
-	adminClientsURL := host + "/admin/realms/wager/clients"
 
-	clientUUID := lookupClientUUID(t, adminClientsURL, adminToken, "provider-b")
-	representation := getClientRepresentation(t, adminClientsURL+"/"+clientUUID, adminToken)
-	originalLifespan := clientAttribute(representation, "access.token.lifespan")
-	defer func() {
-		setClientLifespan(t, adminClientsURL+"/"+clientUUID, adminToken, representation, originalLifespan)
-	}()
+	suffix := strings.ReplaceAll(randomUUID(t).String(), "-", "")[:8]
+	clientID := "expired-" + suffix
+	secret := "expired-secret-" + suffix
+	clientUUID := createKeycloakClient(t, host, adminToken, map[string]any{
+		"clientId":                  clientID,
+		"enabled":                   true,
+		"protocol":                  "openid-connect",
+		"publicClient":              false,
+		"clientAuthenticatorType":   "client-secret",
+		"secret":                    secret,
+		"serviceAccountsEnabled":    true,
+		"standardFlowEnabled":       false,
+		"directAccessGrantsEnabled": false,
+		"attributes":                map[string]any{"access.token.lifespan": "1"},
+		"protocolMappers": []map[string]any{
+			{
+				"name":           "provider-id",
+				"protocol":       "openid-connect",
+				"protocolMapper": "oidc-hardcoded-claim-mapper",
+				"config": map[string]any{
+					"claim.name":           "provider_id",
+					"claim.value":          "provider-a",
+					"jsonType.label":       "String",
+					"access.token.claim":   "true",
+					"id.token.claim":       "false",
+					"userinfo.token.claim": "false",
+				},
+			},
+			{
+				"name":           "audience",
+				"protocol":       "openid-connect",
+				"protocolMapper": "oidc-audience-mapper",
+				"config": map[string]any{
+					"included.custom.audience": "wager-api",
+					"access.token.claim":       "true",
+					"id.token.claim":           "false",
+				},
+			},
+		},
+	})
+	defer deleteKeycloakClient(t, host, adminToken, clientUUID)
 
-	setClientLifespan(t, adminClientsURL+"/"+clientUUID, adminToken, representation, "1")
-
-	expiringToken := fetchClientCredentialsToken(t, issuer, "provider-b", "provider-b-secret")
+	expiringToken := fetchClientCredentialsToken(t, issuer, clientID, secret)
 	time.Sleep(2500 * time.Millisecond)
 
-	status, body := doJSON(t, http.MethodGet, server.URL+"/providers/provider-b/wagering/transactions/whatever", expiringToken, nil)
+	status, body := doJSON(t, http.MethodGet, server.URL+"/providers/provider-a/wagering/transactions/whatever", expiringToken, nil)
 	require.Equal(t, http.StatusUnauthorized, status, body)
 	assert.Contains(t, body, "INVALID_TOKEN")
 }
@@ -213,78 +246,6 @@ func fetchPasswordToken(t *testing.T, host, username, password string) string {
 	require.NoError(t, json.Unmarshal(raw, &payload))
 	require.NotEmpty(t, payload.AccessToken)
 	return payload.AccessToken
-}
-
-func lookupClientUUID(t *testing.T, clientsURL, adminToken, clientID string) string {
-	t.Helper()
-	request, err := http.NewRequest(http.MethodGet, clientsURL+"?clientId="+url.QueryEscape(clientID), nil)
-	require.NoError(t, err)
-	request.Header.Set("Authorization", "Bearer "+adminToken)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	raw, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, response.StatusCode, string(raw))
-
-	var clients []struct {
-		ID string `json:"id"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &clients))
-	require.NotEmpty(t, clients)
-	return clients[0].ID
-}
-
-func getClientRepresentation(t *testing.T, clientURL, adminToken string) map[string]any {
-	t.Helper()
-	request, err := http.NewRequest(http.MethodGet, clientURL, nil)
-	require.NoError(t, err)
-	request.Header.Set("Authorization", "Bearer "+adminToken)
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	raw, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, response.StatusCode, string(raw))
-
-	var representation map[string]any
-	require.NoError(t, json.Unmarshal(raw, &representation))
-	return representation
-}
-
-func clientAttribute(representation map[string]any, name string) string {
-	attributes, _ := representation["attributes"].(map[string]any)
-	if attributes == nil {
-		return ""
-	}
-	value, _ := attributes[name].(string)
-	return value
-}
-
-func setClientLifespan(t *testing.T, clientURL, adminToken string, representation map[string]any, lifespan string) {
-	t.Helper()
-	attributes, _ := representation["attributes"].(map[string]any)
-	if attributes == nil {
-		attributes = map[string]any{}
-	}
-	if lifespan == "" {
-		delete(attributes, "access.token.lifespan")
-	} else {
-		attributes["access.token.lifespan"] = lifespan
-	}
-	representation["attributes"] = attributes
-
-	encoded, err := json.Marshal(representation)
-	require.NoError(t, err)
-	request, err := http.NewRequest(http.MethodPut, clientURL, bytes.NewReader(encoded))
-	require.NoError(t, err)
-	request.Header.Set("Authorization", "Bearer "+adminToken)
-	request.Header.Set("Content-Type", "application/json")
-	response, err := http.DefaultClient.Do(request)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	raw, _ := io.ReadAll(response.Body)
-	require.Less(t, response.StatusCode, 300, string(raw))
 }
 
 func fetchClientCredentialsToken(t *testing.T, issuer, clientID, secret string) string {
