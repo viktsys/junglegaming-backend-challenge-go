@@ -47,3 +47,6 @@ migrate-down: ## Revert the last migration using the local DATABASE_URL
 
 demo: ## Run the authenticated end-to-end demo against a running stack
 	./scripts/demo.sh
+
+security: ## Run the black-box security failure tests against a running stack
+	./scripts/security-test.sh
